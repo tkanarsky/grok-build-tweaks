@@ -237,6 +237,7 @@ fn dispatch_load_session_ungated(
         .prompt
         .set_contextual_hints(app.contextual_hints.undo, app.contextual_hints.plan_mode);
     agent_mut.set_session_recap_available(app.session_recap_available);
+    agent_mut.plan_review_comments = app.plan_review_comments;
     agent_mut.set_voice_mode_available(app.voice_mode_enabled);
     agent_mut.scrollback.begin_batch();
     if matches!(app.restore_code, Some(true)) {
@@ -1144,6 +1145,7 @@ pub(in crate::app::dispatch) fn dispatch_load_session_with_restore(
             .prompt
             .set_contextual_hints(app.contextual_hints.undo, app.contextual_hints.plan_mode);
         agent.set_session_recap_available(app.session_recap_available);
+        agent.plan_review_comments = app.plan_review_comments;
         agent.set_voice_mode_available(app.voice_mode_enabled);
         agent.apply_app_scoped_gates(
             app.sharing_enabled,

@@ -405,6 +405,19 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             dispatch_send_prompt_inner(app, text, false, false, false)
         }
         Action::Interject { text, images } => dispatch_interject(app, text, images),
+        Action::PersistPlanComments {
+            session_id,
+            comments,
+            next_comment_id,
+            commit_outcome,
+            plan_content,
+        } => vec![Effect::PersistPlanComments {
+            session_id,
+            comments,
+            next_comment_id,
+            commit_outcome,
+            plan_content,
+        }],
         Action::SendPromptNow { text, images } => {
             super::interject::dispatch_send_prompt_now(app, text, images)
         }

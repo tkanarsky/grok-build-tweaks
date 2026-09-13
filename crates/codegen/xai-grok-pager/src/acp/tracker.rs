@@ -2225,6 +2225,7 @@ fn tool_call_to_block(tc: &acp::ToolCall, session_cwd: Option<&Path>) -> RenderB
                 (name.into_owned(), ToolCallBlock::Other)
             };
             let mut block = OtherToolCallBlock::new(label, summary);
+            block.tool_call_id = Some(tc.tool_call_id.0.to_string());
             let ct = content_text(tc);
             if !success {
                 block.error = Some(if ct.is_empty() {
@@ -2265,6 +2266,7 @@ fn tool_call_title(tc: &acp::ToolCall) -> Cow<'_, str> {
 /// Build the media block from the typed `raw_output` path.
 fn media_gen_block(tc: &acp::ToolCall, success: bool) -> RenderBlock {
     let mut block = OtherToolCallBlock::new(tool_call_title(tc), String::new());
+    block.tool_call_id = Some(tc.tool_call_id.0.to_string());
     if !success {
         let err = content_text(tc);
         block.error = Some(if err.is_empty() { "Failed".into() } else { err });

@@ -178,6 +178,7 @@ pub(in crate::app::dispatch) fn dispatch_fork_resolved(
             .prompt
             .set_contextual_hints(app.contextual_hints.undo, app.contextual_hints.plan_mode);
         agent.set_session_recap_available(app.session_recap_available);
+        agent.plan_review_comments = app.plan_review_comments;
         agent.set_voice_mode_available(app.voice_mode_enabled);
         agent.apply_app_scoped_gates(
             app.sharing_enabled,

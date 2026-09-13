@@ -1272,6 +1272,9 @@ pub struct AgentView {
     /// Cleared to `None` when `detect_plan_mode_change()` confirms real state.
     /// The cycle logic uses `plan_mode_pending.unwrap_or(plan_mode_active)` so rapid Shift+Tab presses advance correctly without waiting for ACP.
     pub(crate) plan_mode_pending: Option<bool>,
+    /// Shell advertised `x.ai/planReviewComments`. When false, send the legacy
+    /// rendered `feedback` slug and do not call `x.ai/plan_comments`.
+    pub(crate) plan_review_comments: bool,
     /// Session mode to apply once this agent's ACP session exists. Set when the agent is spawned from the dashboard with `/plan` active (the session does not exist yet, so the mode can't be sent immediately).
     /// Consumed in the `SessionCreated` / `WorktreeSessionCreated` handlers, mirroring `AgentSession.deferred_model_switch`.
     pub(crate) deferred_session_mode: Option<xai_grok_tools::types::SessionMode>,
@@ -1322,6 +1325,7 @@ pub struct AgentView {
     pub(crate) plan_approval_view: Option<PlanApprovalViewState>,
     pub(crate) latest_inline_plan_content: Option<String>,
     pub(crate) plan_comments: Vec<PlanComment>,
+    pub(crate) committed_plan_reviews: Vec<plan::CommittedPlanReview>,
     /// Monotonic counter for casual plan comment IDs.
     pub(crate) plan_next_comment_id: u64,
     /// Line range for the casual comment being composed (1-based).
@@ -2093,6 +2097,7 @@ pub(crate) mod test_fixtures {
             session_id: "test-session".into(),
             tool_call_id: "call-1".into(),
             plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
+            ..Default::default()
         };
         crate::views::plan_approval_view::PlanApprovalViewState::new(
             request,

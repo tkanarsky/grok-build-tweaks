@@ -22,6 +22,7 @@ pub mod marketplace;
 pub mod mcp;
 pub mod memory;
 pub mod notification;
+pub mod plan_comments;
 pub mod plugins;
 pub mod pr;
 pub mod privacy;

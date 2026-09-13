@@ -675,6 +675,7 @@ pub(super) fn handle_session_notification_with_origin(
                     .get("recap")
                     .is_some();
                 child_view.set_session_recap_available(recap_visible);
+                child_view.plan_review_comments = agent.plan_review_comments;
                 let voice_visible = agent
                     .prompt
                     .slash_controller
@@ -1269,6 +1270,22 @@ pub(super) fn handle_session_notification_with_origin(
                 });
                 true
             }
+        }
+        XaiSessionUpdate::PlanReview {
+            tool_call_id,
+            outcome,
+            comments,
+            feedback,
+            plan_content,
+        } => {
+            agent.record_committed_plan_review(
+                tool_call_id,
+                outcome,
+                comments,
+                feedback,
+                plan_content,
+            );
+            true
         }
         XaiSessionUpdate::InteractionResolved { tool_call_id } => {
             agent.dismiss_resolved_interaction(&tool_call_id)

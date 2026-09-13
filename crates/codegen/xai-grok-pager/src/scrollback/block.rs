@@ -800,6 +800,17 @@ impl RenderBlock {
         )
     }
 
+    /// ACP id of a plan-mode tool row, when the tracker stamped it.
+    pub fn plan_tool_call_id(&self) -> Option<&str> {
+        if !self.is_plan_mode_tool() {
+            return None;
+        }
+        match self {
+            RenderBlock::ToolCall(ToolCallBlock::Other(b)) => b.tool_call_id.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Absolute path of the media (image/video) this block references, if it is a media-generation tool result.
     /// Used to resolve the short relative paths the model prints in prose (`images/1.jpg`) to a clickable link.
     pub(crate) fn media_ref_path(&self) -> Option<std::path::PathBuf> {

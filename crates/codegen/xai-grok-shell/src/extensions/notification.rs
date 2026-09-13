@@ -1084,6 +1084,19 @@ pub enum SessionUpdate {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stop_sequence: Option<String>,
     },
+    /// A committed plan-mode review. Snapshots the plan body so chips stay
+    /// meaningful after later `plan.md` overwrites.
+    PlanReview {
+        tool_call_id: String,
+        /// `"approved"`, `"cancelled"`, `"abandoned"`, or `"casual"`.
+        outcome: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        comments: Vec<xai_grok_tools::implementations::grok_build::exit_plan_mode::PlanComment>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feedback: Option<String>,
+        #[serde(default)]
+        plan_content: String,
+    },
     /// Catch-all for unrecognized session update types.
     /// Allows forward/backward compatibility when variants are added or removed.
     /// All fields from the unrecognized variant are discarded during deserialization.
@@ -1739,6 +1752,27 @@ mod tests {
 
         let json = serde_json::to_value(&update).unwrap();
         assert_eq!(json["tokens_used"], 75_000);
+    }
+
+    #[test]
+    fn plan_review_round_trips_and_keeps_plan_body_snapshot() {
+        use xai_grok_tools::implementations::grok_build::exit_plan_mode::PlanComment;
+        let update = SessionUpdate::PlanReview {
+            tool_call_id: "tc".into(),
+            outcome: "cancelled".into(),
+            comments: vec![PlanComment {
+                id: 1,
+                line_range: 2..3,
+                text: "nits".into(),
+            }],
+            feedback: Some("retries".into()),
+            plan_content: "# Feature A v1\n".into(),
+        };
+        let json = serde_json::to_value(&update).unwrap();
+        assert_eq!(json["sessionUpdate"], "plan_review");
+        assert_eq!(json["plan_content"], "# Feature A v1\n");
+        let parsed: SessionUpdate = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, update);
     }
 
     #[test]

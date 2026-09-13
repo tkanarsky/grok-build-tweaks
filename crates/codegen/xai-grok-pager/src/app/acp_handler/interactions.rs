@@ -310,10 +310,17 @@ pub(super) fn handle_exit_plan_mode(
         agent.prompt.set_text("");
     }
 
-    let state = PlanApprovalViewState::with_source(params, source, session_draft, ext.response_tx);
-
-    agent.plan_comments.clear();
-    agent.plan_next_comment_id = 0;
+    let mut state =
+        PlanApprovalViewState::with_source(params, source, session_draft, ext.response_tx);
+    if state.comments.is_empty() && !agent.plan_comments.is_empty() {
+        state.comments = std::mem::take(&mut agent.plan_comments);
+        state.next_comment_id = state.next_comment_id.max(agent.plan_next_comment_id);
+    } else {
+        agent.plan_comments.clear();
+        if state.next_comment_id == 0 {
+            agent.plan_next_comment_id = 0;
+        }
+    }
 
     if state.source == PlanReviewSource::Inline {
         agent.latest_inline_plan_content = state.plan_content.clone();

@@ -75,6 +75,17 @@ impl AgentView {
         if key!(Enter).matches(key)
             && !self.scrollback.is_selected_group_header()
             && let Some(idx) = self.scrollback.selected()
+            && self
+                .scrollback
+                .entry(idx)
+                .is_some_and(|e| e.block.is_plan_mode_tool())
+        {
+            self.open_plan_from_selected_tool();
+            return InputOutcome::Changed;
+        }
+        if key!(Enter).matches(key)
+            && !self.scrollback.is_selected_group_header()
+            && let Some(idx) = self.scrollback.selected()
             && let Some(entry) = self.scrollback.entry(idx)
             && let crate::scrollback::block::RenderBlock::Subagent(ref sb) = entry.block
         {

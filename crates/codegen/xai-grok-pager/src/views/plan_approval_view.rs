@@ -2,7 +2,7 @@ use agent_client_protocol as acp;
 use xai_acp_lib::AcpResult;
 
 pub use xai_grok_tools::implementations::grok_build::exit_plan_mode::{
-    ExitPlanModeExtRequest, ExitPlanModeExtResponse,
+    ExitPlanModeExtRequest, ExitPlanModeExtResponse, PlanComment,
 };
 
 use crate::views::prompt_widget::StashedPrompt;
@@ -49,13 +49,6 @@ pub enum PlanReviewSource {
 pub enum PlanReviewOutcome {
     Approved,
     Abandoned,
-}
-
-#[derive(Debug, Clone)]
-pub struct PlanComment {
-    pub id: u64,
-    pub line_range: std::ops::Range<usize>,
-    pub text: String,
 }
 
 pub struct PlanApprovalViewState {
@@ -105,8 +98,8 @@ impl PlanApprovalViewState {
             stashed_prompt,
             response_tx: Some(response_tx),
             focus: PlanApprovalFocus::Preview,
-            comments: Vec::new(),
-            next_comment_id: 0,
+            comments: request.comments,
+            next_comment_id: request.next_comment_id,
             editing_comment_id: None,
             commenting_range: None,
             stashed_feedback_prompt: None,
@@ -154,10 +147,12 @@ pub fn send_exit_plan_response(
     tx: tokio::sync::oneshot::Sender<AcpResult<acp::ExtResponse>>,
     outcome: &str,
     feedback: Option<String>,
+    comments: Vec<PlanComment>,
 ) {
     let feedback = feedback.filter(|f| !f.trim().is_empty());
     let resp = ExitPlanModeExtResponse {
         outcome: outcome.into(),
+        comments,
         feedback,
     };
     let raw = serde_json::value::to_raw_value(&resp)
@@ -169,25 +164,49 @@ fn send_ext_response(
     tx: &mut Option<tokio::sync::oneshot::Sender<AcpResult<acp::ExtResponse>>>,
     outcome: &str,
     feedback: Option<String>,
+    comments: Vec<PlanComment>,
 ) -> bool {
     let Some(tx) = tx.take() else {
         return false;
     };
-    send_exit_plan_response(tx, outcome, feedback);
+    send_exit_plan_response(tx, outcome, feedback, comments);
     true
 }
 
 impl PlanApprovalViewState {
     pub fn send_approved(&mut self) -> bool {
-        send_ext_response(&mut self.response_tx, "approved", None)
+        self.send_approved_with(false, None)
+    }
+
+    /// `structured`: include chips on the wire (new shell). Cap-off omits them.
+    /// Cap-on `feedback` is raw freeform; cap-off leaves `feedback` empty (legacy Interject carries notes).
+    pub fn send_approved_with(&mut self, structured: bool, freeform: Option<String>) -> bool {
+        let comments = if structured {
+            std::mem::take(&mut self.comments)
+        } else {
+            Vec::new()
+        };
+        let feedback = if structured { freeform } else { None };
+        send_ext_response(&mut self.response_tx, "approved", feedback, comments)
     }
 
     pub fn send_abandoned(&mut self) -> bool {
-        send_ext_response(&mut self.response_tx, "abandoned", None)
+        send_ext_response(&mut self.response_tx, "abandoned", None, Vec::new())
     }
 
     pub fn send_cancelled(&mut self, feedback: Option<String>) -> bool {
-        send_ext_response(&mut self.response_tx, "cancelled", feedback)
+        self.send_cancelled_with(feedback, false)
+    }
+
+    /// `structured`: chips on the wire and `feedback` is raw freeform.
+    /// Cap-off: empty chips, `feedback` is the rendered slug.
+    pub fn send_cancelled_with(&mut self, feedback: Option<String>, structured: bool) -> bool {
+        let comments = if structured {
+            std::mem::take(&mut self.comments)
+        } else {
+            Vec::new()
+        };
+        send_ext_response(&mut self.response_tx, "cancelled", feedback, comments)
     }
 
     pub fn send_stale_cancel(&mut self) -> bool {
@@ -265,6 +284,7 @@ mod tests {
             session_id: "test-session".into(),
             tool_call_id: "call_123".into(),
             plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
+            ..Default::default()
         };
         let state = PlanApprovalViewState::new(
             request,
@@ -315,6 +335,38 @@ mod tests {
             serde_json::from_str(raw.0.get()).expect("should be valid JSON");
         assert_eq!(parsed["outcome"], "cancelled");
         assert!(parsed.get("feedback").is_none());
+        assert!(parsed.get("comments").is_none());
+    }
+
+    #[test]
+    fn send_cancelled_cap_off_omits_comments_even_when_chips_exist() {
+        let (mut state, mut rx) = make_test_state();
+        state.comments.push(PlanComment {
+            id: 1,
+            line_range: 2..3,
+            text: "nits".into(),
+        });
+        assert!(state.send_cancelled_with(Some("rewrite auth".into()), false));
+        let raw = rx.try_recv().unwrap().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(raw.0.get()).unwrap();
+        assert_eq!(parsed["outcome"], "cancelled");
+        assert_eq!(parsed["feedback"], "rewrite auth");
+        assert!(parsed.get("comments").is_none());
+    }
+
+    #[test]
+    fn send_cancelled_structured_includes_comments() {
+        let (mut state, mut rx) = make_test_state();
+        state.comments.push(PlanComment {
+            id: 1,
+            line_range: 2..3,
+            text: "nits".into(),
+        });
+        assert!(state.send_cancelled_with(Some("also retries".into()), true));
+        let raw = rx.try_recv().unwrap().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(raw.0.get()).unwrap();
+        assert_eq!(parsed["comments"][0]["text"], "nits");
+        assert_eq!(parsed["feedback"], "also retries");
     }
 
     #[test]
@@ -369,6 +421,38 @@ mod tests {
         assert!(state.stashed_feedback_prompt.is_none());
     }
 
+    #[test]
+    fn with_source_hydrates_comments_from_request() {
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let request = ExitPlanModeExtRequest {
+            session_id: "test-session".into(),
+            tool_call_id: "call_hydrate".into(),
+            plan_content: Some("# Plan\nline".into()),
+            comments: vec![PlanComment {
+                id: 7,
+                line_range: 1..2,
+                text: "nits".into(),
+            }],
+            next_comment_id: 8,
+        };
+        let state = PlanApprovalViewState::new(
+            request,
+            StashedPrompt {
+                text: String::new(),
+                cursor: 0,
+                images: Vec::new(),
+                chip_elements: Vec::new(),
+                image_counter: 0,
+                image_undo_stash: Vec::new(),
+            },
+            tx,
+        );
+        assert_eq!(state.comments.len(), 1);
+        assert_eq!(state.comments[0].id, 7);
+        assert_eq!(state.comments[0].line_range, 1..2);
+        assert_eq!(state.next_comment_id, 8);
+    }
+
     fn make_empty_plan_state() -> (
         PlanApprovalViewState,
         tokio::sync::oneshot::Receiver<AcpResult<acp::ExtResponse>>,
@@ -378,6 +462,7 @@ mod tests {
             session_id: "test-session".into(),
             tool_call_id: "call_456".into(),
             plan_content: None,
+            ..Default::default()
         };
         let state = PlanApprovalViewState::new(
             request,
@@ -419,6 +504,7 @@ mod tests {
             session_id: "test-session".into(),
             tool_call_id: "call_789".into(),
             plan_content: Some("   \n\n  ".into()),
+            ..Default::default()
         };
         let state = PlanApprovalViewState::new(
             request,
