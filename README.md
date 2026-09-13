@@ -1,4 +1,18 @@
-<div align="center">
+This is upstream xai-grok-build (tbd with the following fixes I didn't get to implement before leaving Tesla (since xai doesnn't accept external contributions, and I'm now an external contributor, this is the best I can do :P)
+
+To be clear, this is not an official spxai/tesla product; it is just a third-party patch set that fixes the pet peeves I encountered when using Build a lot.
+
+# Improvements
+- Plan comments are persisted if pager dies without a feedback turn! e.g. if your ssh session disconnects and you forgot to tmux-wrap it or something.
+  - Also a lot of under the hood changes that cut out a lot of the jank of the plan mode lifecycle. Email me if you want to yap about the software architecture - it's much too wordy to list out here.  
+ 
+# Upcoming changes!
+- Tagging any line with an in-line margin note, reusing a lot of the plan comment mechanisms.
+- Quick agree/disagree reactions to lines.
+
+---
+
+div align="center">
 
 <h1>
   <picture>
