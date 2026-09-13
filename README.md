@@ -12,7 +12,7 @@ To be clear, this is not an official spxai/tesla product; it is just a third-par
 
 ---
 
-div align="center">
+<div align="center">
 
 <h1>
   <picture>
