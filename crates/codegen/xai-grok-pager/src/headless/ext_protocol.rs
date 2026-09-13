@@ -32,6 +32,7 @@ pub(crate) fn reply_headless_ext_method(args: AcpArgsBox<acp::ExtRequest>) {
         // The model sees "Your plan has been approved. You can now start coding.".
         "x.ai/exit_plan_mode" => ext_response_from(&ExitPlanModeExtResponse {
             outcome: "approved".to_string(),
+            comments: Vec::new(),
             feedback: None,
         }),
         other => Err(acp::Error::new(

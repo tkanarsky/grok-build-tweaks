@@ -36,6 +36,12 @@ pub struct PlanModeTracker {
     /// `exit_plan_mode` approval UI is outstanding (client has not answered).
     /// Persisted so resume can restore approval chrome.
     awaiting_plan_approval: bool,
+    /// Saved review chips. Body is `plan.md` / the reverse-request `planContent`,
+    /// not duplicated here.
+    open_comments: xai_grok_tools::implementations::grok_build::exit_plan_mode::PlanCommentSet,
+    /// Projection to append to the `exit_plan_mode` tool result after approve.
+    /// Not persisted.
+    pending_approved_projection: Option<String>,
     /// Rendered activation reminder buffered by a mid-turn toggle ([`Self::activate_mid_turn`]).
     /// While set, the model has NOT seen plan mode yet.
     /// A toggle-off withdraws it and rolls the activation back instead of deferring an exit the model never knew about.
@@ -63,6 +69,16 @@ pub struct PlanModeSnapshot {
     /// Survives process restart so the pager can restore approval chrome without treating every Active session that has a plan.md as pending.
     #[serde(default)]
     pub awaiting_plan_approval: bool,
+    /// Open review chips. Default empty for sessions persisted before this field.
+    /// Omitted when empty so a fresh snapshot matches pre-comment `plan_mode.json`.
+    #[serde(default, skip_serializing_if = "open_comments_is_empty")]
+    pub open_comments: xai_grok_tools::implementations::grok_build::exit_plan_mode::PlanCommentSet,
+}
+
+fn open_comments_is_empty(
+    set: &xai_grok_tools::implementations::grok_build::exit_plan_mode::PlanCommentSet,
+) -> bool {
+    set.comments.is_empty() && set.next_comment_id == 0
 }
 impl PlanModeTracker {
     /// Create a new tracker. `session_dir` is the session's storage
@@ -74,6 +90,8 @@ impl PlanModeTracker {
             reminder_count: 0,
             pending_exit_reminder: false,
             awaiting_plan_approval: false,
+            open_comments: Default::default(),
+            pending_approved_projection: None,
             pending_activation: None,
             plan_file_path: session_dir.join("plan.md"),
         }
@@ -98,6 +116,8 @@ impl PlanModeTracker {
             reminder_count: snapshot.reminder_count,
             pending_exit_reminder: snapshot.pending_exit_reminder,
             awaiting_plan_approval: snapshot.awaiting_plan_approval,
+            open_comments: snapshot.open_comments,
+            pending_approved_projection: None,
             pending_activation: None,
             plan_file_path: session_dir.join("plan.md"),
         }
@@ -110,6 +130,26 @@ impl PlanModeTracker {
     pub(crate) fn is_awaiting_plan_approval(&self) -> bool {
         self.awaiting_plan_approval
     }
+    pub(crate) fn set_open_comments(
+        &mut self,
+        comments: xai_grok_tools::implementations::grok_build::exit_plan_mode::PlanCommentSet,
+    ) {
+        self.open_comments = comments;
+    }
+    pub(crate) fn open_comments(
+        &self,
+    ) -> xai_grok_tools::implementations::grok_build::exit_plan_mode::PlanCommentSet {
+        self.open_comments.clone()
+    }
+    pub(crate) fn clear_open_comments(&mut self) {
+        self.open_comments = Default::default();
+    }
+    pub(crate) fn set_pending_approved_projection(&mut self, text: String) {
+        self.pending_approved_projection = Some(text);
+    }
+    pub(crate) fn take_pending_approved_projection(&mut self) -> Option<String> {
+        self.pending_approved_projection.take()
+    }
     pub fn snapshot(&self) -> PlanModeSnapshot {
         PlanModeSnapshot {
             state: self.state,
@@ -117,6 +157,7 @@ impl PlanModeTracker {
             awaiting_plan_approval: self.awaiting_plan_approval,
             reminder_count: self.reminder_count,
             pending_exit_reminder: self.pending_exit_reminder,
+            open_comments: self.open_comments.clone(),
         }
     }
     pub fn state(&self) -> PlanModeState {
@@ -228,6 +269,7 @@ impl PlanModeTracker {
         self.state = PlanModeState::Inactive;
         self.reminder_count = 0;
         self.awaiting_plan_approval = false;
+        self.open_comments = Default::default();
         self.pending_activation = None;
         true
     }
@@ -235,6 +277,7 @@ impl PlanModeTracker {
     /// `turn_in_flight`: whether a model turn is currently running.
     pub(crate) fn user_exit(&mut self, turn_in_flight: bool) {
         self.awaiting_plan_approval = false;
+        self.open_comments = Default::default();
         if let Some(pending) = self.pending_activation.take()
             && self.state == PlanModeState::Active
         {
@@ -1093,5 +1136,44 @@ mod tests {
         assert!(!snapshot.awaiting_plan_approval);
         let restored = PlanModeTracker::from_snapshot(PathBuf::from("/tmp/test-session"), snapshot);
         assert!(!restored.is_awaiting_plan_approval());
+        assert!(restored.open_comments().comments.is_empty());
+    }
+
+    #[test]
+    fn open_comments_survive_snapshot_round_trip() {
+        use xai_grok_tools::implementations::grok_build::exit_plan_mode::{
+            PlanComment, PlanCommentSet,
+        };
+        let mut t = test_tracker();
+        t.set_open_comments(PlanCommentSet {
+            comments: vec![PlanComment {
+                id: 1,
+                line_range: 4..6,
+                text: "middleware".into(),
+            }],
+            next_comment_id: 2,
+        });
+        let json = serde_json::to_value(t.snapshot()).unwrap();
+        // Snapshot is snake_case (matches existing plan_mode.json). Nested
+        // PlanCommentSet/PlanComment are camelCase (`lineRange`, `nextCommentId`).
+        assert!(json.get("openComments").is_none());
+        assert_eq!(json["open_comments"]["comments"][0]["lineRange"]["start"], 4);
+        assert_eq!(json["open_comments"]["comments"][0]["lineRange"]["end"], 6);
+        assert_eq!(json["open_comments"]["nextCommentId"], 2);
+        assert!(json.get("planContent").is_none());
+        let restored =
+            PlanModeTracker::from_snapshot(PathBuf::from("/tmp/test-session"), t.snapshot());
+        let set = restored.open_comments();
+        assert_eq!(set.comments.len(), 1);
+        assert_eq!(set.comments[0].text, "middleware");
+        assert_eq!(set.next_comment_id, 2);
+    }
+
+    #[test]
+    fn snapshot_omits_empty_open_comments() {
+        let t = test_tracker();
+        let json = serde_json::to_value(t.snapshot()).unwrap();
+        assert!(json.get("open_comments").is_none());
+        assert!(json.get("openComments").is_none());
     }
 }

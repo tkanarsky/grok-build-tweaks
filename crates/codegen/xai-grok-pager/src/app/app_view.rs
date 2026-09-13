@@ -693,6 +693,8 @@ pub struct AppView {
     /// Resolved by the shell and advertised on ACP initialize (`sessionRecap`).
     /// When false, the pager must not request recaps (zero `x.ai/recap` traffic).
     pub session_recap_available: bool,
+    /// Shell understands structured plan-review chips (`x.ai/planReviewComments`).
+    pub plan_review_comments: bool,
     /// Shell-advertised eligibility for the `/feedback` trace-upload offer, exactly as received (initialize meta / auth-meta refreshes).
     /// Read it through [`Self::feedback_trace_offer`], which subtracts the latch.
     pub shell_feedback_trace_offer: bool,
@@ -1663,6 +1665,7 @@ impl AppView {
             session_picker_grouped: false,
             cancel_rewind_enabled: true,
             session_recap_available: false,
+            plan_review_comments: false,
             shell_feedback_trace_offer: false,
             feedback_trace_choice_latched: false,
             tutorial: None,

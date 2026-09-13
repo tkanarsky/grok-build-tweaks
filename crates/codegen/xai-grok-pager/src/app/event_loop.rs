@@ -1357,6 +1357,7 @@ pub(crate) async fn run(
         .unwrap_or(true);
     app.cancel_rewind_enabled = connection.cancel_rewind_enabled;
     apply_session_recap_available(&mut app, connection.session_recap_available);
+    apply_plan_review_comments(&mut app, connection.plan_review_comments);
     app.shell_feedback_trace_offer = connection.feedback_trace_offer;
 
     // Preserve auth methods so logout then re-login works without restarting
@@ -3473,6 +3474,13 @@ fn apply_session_recap_available(app: &mut AppView, available: bool) {
     app.welcome_prompt.set_recap_visible(available);
     if let Some(dashboard) = app.dashboard.as_mut() {
         dashboard.set_recap_visible(available);
+    }
+}
+
+fn apply_plan_review_comments(app: &mut AppView, available: bool) {
+    app.plan_review_comments = available;
+    for agent in app.agents.values_mut() {
+        agent.plan_review_comments = available;
     }
 }
 

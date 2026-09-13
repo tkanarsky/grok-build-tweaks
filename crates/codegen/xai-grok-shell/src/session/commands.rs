@@ -288,6 +288,15 @@ impl From<SkillUpdateKind> for AdvertiseTrigger {
         }
     }
 }
+
+/// Optional commit attached to `x.ai/plan_comments` (casual send).
+pub struct PlanReviewCommit {
+    pub outcome: String,
+    pub tool_call_id: String,
+    pub plan_content: String,
+    pub feedback: Option<String>,
+}
+
 pub enum SessionCommand {
     Initialize {
         system_prompt: String,
@@ -304,6 +313,15 @@ pub enum SessionCommand {
     /// The client then re-shows its approval UI over a real live waiter.
     /// Fire-and-forget; the actor spawns the round-trip and the decision.
     RestorePlanApproval,
+    /// Replace or read the open plan-review comment set (`x.ai/plan_comments`).
+    /// `set: Some` writes then replies with the stored set; `set: None` is a get.
+    PlanComments {
+        set: Option<xai_grok_tools::implementations::grok_build::exit_plan_mode::PlanCommentSet>,
+        commit: Option<PlanReviewCommit>,
+        respond_to: oneshot::Sender<
+            xai_grok_tools::implementations::grok_build::exit_plan_mode::PlanCommentSet,
+        >,
+    },
     /// A `/rename` landed for this resident session.
     /// `manual: true` (a user title) freezes the auto title refresh and aborts any in-flight one.
     /// `manual: false` (`/rename --auto`) reopens it so the whole-conversation refresh can re-title.

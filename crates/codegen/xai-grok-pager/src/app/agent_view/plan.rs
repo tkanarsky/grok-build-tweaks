@@ -188,9 +188,11 @@ impl AgentView {
                 ))
             }
         };
-        pav.send_approved();
+        pav.send_approved_with(self.plan_review_comments, freeform);
         self.close_plan_review(pav, PlanReviewOutcome::Approved);
-        if let Some(text) = review_comments {
+        if !self.plan_review_comments
+            && let Some(text) = review_comments
+        {
             return InputOutcome::Action(Action::Interject {
                 text,
                 images: vec![],
@@ -301,19 +303,25 @@ impl AgentView {
             return InputOutcome::Changed;
         };
         let formatted = pav.format_feedback(feedback.as_deref());
-        let to_send = if formatted.trim().is_empty() {
-            feedback
-        } else {
-            Some(formatted)
-        };
-        if crate::app::minimal_mode_active()
-            && let Some(msg) = to_send.as_deref().map(str::trim).filter(|s| !s.is_empty())
-        {
+        if crate::app::minimal_mode_active() && !formatted.trim().is_empty() {
             self.scrollback
-                .push_block(crate::scrollback::RenderBlock::user_prompt(msg.to_string()));
+                .push_block(crate::scrollback::RenderBlock::user_prompt(
+                    formatted.trim().to_string(),
+                ));
         }
         Self::merge_live_images_into_stash(&mut self.prompt, &mut pav.stashed_prompt);
-        pav.send_cancelled(to_send);
+        if self.plan_review_comments {
+            // New shell: chips on the wire, `feedback` is raw freeform.
+            pav.send_cancelled_with(feedback.filter(|s| !s.trim().is_empty()), true);
+        } else {
+            // Cap off: identical to the old pager — one rendered slug, no chips.
+            let to_send = if formatted.trim().is_empty() {
+                feedback
+            } else {
+                Some(formatted)
+            };
+            pav.send_cancelled_with(to_send, false);
+        }
         if pav.source == PlanReviewSource::Inline {
             self.latest_inline_plan_content = None;
         }
@@ -544,7 +552,27 @@ impl AgentView {
         } else {
             self.prompt.set_text("");
         }
-        InputOutcome::Changed
+        self.persist_open_plan_comments()
+    }
+    fn persist_open_plan_comments(&self) -> InputOutcome {
+        if !self.plan_review_comments {
+            return InputOutcome::Changed;
+        }
+        let Some(session_id) = self.session.session_id.clone() else {
+            return InputOutcome::Changed;
+        };
+        let (comments, next_comment_id) = if let Some(pav) = self.plan_approval_view.as_ref() {
+            (pav.comments.clone(), pav.next_comment_id)
+        } else {
+            (self.plan_comments.clone(), self.plan_next_comment_id)
+        };
+        InputOutcome::Action(Action::PersistPlanComments {
+            session_id,
+            comments,
+            next_comment_id,
+            commit_outcome: None,
+            plan_content: None,
+        })
     }
     pub(super) fn delete_plan_comment_at_cursor(&mut self) -> InputOutcome {
         let viewer = match self.line_viewer.as_ref() {
@@ -566,6 +594,7 @@ impl AgentView {
             if let Some(ref mut viewer) = self.line_viewer {
                 viewer.rebuild_with_comments(&comments);
             }
+            return self.persist_open_plan_comments();
         }
         InputOutcome::Changed
     }
@@ -651,7 +680,7 @@ impl AgentView {
         if let Some(ref mut viewer) = self.line_viewer {
             viewer.rebuild_with_comments(&comments);
         }
-        InputOutcome::Changed
+        self.persist_open_plan_comments()
     }
     /// Cancel casual plan commenting without saving.
     pub(super) fn cancel_casual_plan_commenting(&mut self) -> InputOutcome {
@@ -713,7 +742,7 @@ impl AgentView {
         if let Some(ref mut viewer) = self.line_viewer {
             viewer.rebuild_with_comments(&comments);
         }
-        InputOutcome::Changed
+        self.persist_open_plan_comments()
     }
     pub(super) fn send_casual_plan_comments(&mut self) -> InputOutcome {
         if self.plan_comments.is_empty() {
@@ -729,12 +758,99 @@ impl AgentView {
             plan_content.as_deref(),
         );
         let text = format!("Plan feedback:\n\n{body}");
-        self.plan_comments.clear();
+        let comments = std::mem::take(&mut self.plan_comments);
         self.plan_next_comment_id = 0;
         self.cancel_line_viewer();
         self.show_toast("Plan feedback sent.");
+        if self.plan_review_comments {
+            if let Some(session_id) = self.session.session_id.clone() {
+                return InputOutcome::ActionPair(
+                    Action::PersistPlanComments {
+                        session_id,
+                        comments,
+                        next_comment_id: 0,
+                        commit_outcome: Some("casual".into()),
+                        plan_content,
+                    },
+                    Action::SendPrompt(text),
+                );
+            }
+        }
         InputOutcome::Action(Action::SendPrompt(text))
     }
+
+    pub(crate) fn record_committed_plan_review(
+        &mut self,
+        tool_call_id: String,
+        outcome: String,
+        comments: Vec<PlanComment>,
+        feedback: Option<String>,
+        plan_content: String,
+    ) {
+        self.committed_plan_reviews
+            .retain(|r| r.tool_call_id != tool_call_id);
+        self.committed_plan_reviews.push(CommittedPlanReview {
+            tool_call_id,
+            outcome,
+            comments,
+            feedback,
+            plan_content,
+        });
+    }
+
+    /// Open the committed review for the selected plan-tool row, or current `plan.md`.
+    pub(crate) fn open_plan_from_selected_tool(&mut self) {
+        if let Some(idx) = self.scrollback.selected()
+            && let Some(id) = self
+                .scrollback
+                .entry(idx)
+                .and_then(|e| e.block.plan_tool_call_id().map(str::to_owned))
+            && self.open_committed_plan_review(&id)
+        {
+            return;
+        }
+        self.show_plan_preview();
+    }
+
+    pub(crate) fn open_committed_plan_review(&mut self, tool_call_id: &str) -> bool {
+        let Some(review) = self
+            .committed_plan_reviews
+            .iter()
+            .find(|r| r.tool_call_id == tool_call_id)
+            .cloned()
+        else {
+            return false;
+        };
+        let body = if review.plan_content.trim().is_empty() {
+            "# No plan written yet\n".to_owned()
+        } else {
+            review.plan_content.clone()
+        };
+        let Some(mut viewer) =
+            crate::views::file_search::line_viewer::LineViewerState::open_markdown_content(
+                "plan.md", body, None,
+            )
+        else {
+            return false;
+        };
+        viewer.kind = crate::views::file_search::line_viewer::LineViewerKind::PlanPreview;
+        viewer.title_override = Some(format!("plan.md ({})", review.outcome));
+        viewer.fullscreen = true;
+        if !review.comments.is_empty() {
+            viewer.rebuild_with_comments(&review.comments);
+        }
+        self.line_viewer = Some(viewer);
+        true
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CommittedPlanReview {
+    pub tool_call_id: String,
+    pub outcome: String,
+    pub comments: Vec<PlanComment>,
+    pub feedback: Option<String>,
+    pub plan_content: String,
 }
 #[cfg(test)]
 mod plan_chip_tests {
@@ -934,6 +1050,7 @@ mod plan_approval_enter_tests {
             session_id: "test-session".into(),
             tool_call_id: "call-1".into(),
             plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
+            ..Default::default()
         };
         let mut pav = crate::views::plan_approval_view::PlanApprovalViewState::new(
             request,
@@ -1360,6 +1477,7 @@ mod plan_approval_optimistic_mode_tests {
             session_id: "test-session".into(),
             tool_call_id: "call-1".into(),
             plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
+            ..Default::default()
         };
         let pav = crate::views::plan_approval_view::PlanApprovalViewState::new(
             request,
@@ -1409,6 +1527,99 @@ mod plan_approval_optimistic_mode_tests {
         ));
         assert_eq!(agent.plan_mode_pending, Some(false));
         assert!(!effective_plan_mode(&agent));
+    }
+    #[test]
+    fn cap_on_approve_with_comments_does_not_interject() {
+        let (mut agent, mut rx) = agent_in_plan_mode_with_approval();
+        agent.plan_review_comments = true;
+        if let Some(ref mut pav) = agent.plan_approval_view {
+            pav.comments
+                .push(crate::views::plan_approval_view::PlanComment {
+                    id: 1,
+                    line_range: 1..2,
+                    text: "use the existing helper".into(),
+                });
+        }
+        let outcome = agent.approve_plan();
+        assert!(
+            matches!(outcome, InputOutcome::Changed),
+            "cap-on approve must not Interject, got {outcome:?}"
+        );
+        let raw = rx.try_recv().unwrap().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(raw.0.get()).unwrap();
+        assert_eq!(parsed["outcome"], "approved");
+        assert_eq!(parsed["comments"][0]["text"], "use the existing helper");
+    }
+    #[test]
+    fn open_committed_plan_review_uses_snapshotted_body() {
+        let (mut agent, _rx) = agent_in_plan_mode_with_approval();
+        agent.record_committed_plan_review(
+            "call_a".into(),
+            "cancelled".into(),
+            vec![crate::views::plan_approval_view::PlanComment {
+                id: 1,
+                line_range: 1..2,
+                text: "v1 note".into(),
+            }],
+            None,
+            "# Feature A v1\n".into(),
+        );
+        assert!(agent.open_committed_plan_review("call_a"));
+        let viewer = agent.line_viewer.as_mut().expect("viewer");
+        assert_eq!(
+            viewer.markdown_content_for_feedback().as_deref(),
+            Some("# Feature A v1\n")
+        );
+        viewer.prepare_layout(80, 20);
+        assert!(
+            viewer.lines.iter().any(|item| item.comment_id() == Some(1)),
+            "snapshotted chips must appear on the historical body"
+        );
+    }
+    #[test]
+    fn enter_on_exit_plan_tool_opens_committed_review_not_current_plan() {
+        use crate::actions::ActionRegistry;
+        use crate::scrollback::block::RenderBlock;
+        use crate::scrollback::blocks::tool::{OtherToolCallBlock, ToolCallBlock};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut agent = make_agent();
+        agent.plan_approval_view = None;
+        agent.latest_inline_plan_content = Some("# Feature B overwrite\n".into());
+        let mut block = OtherToolCallBlock::new("exit_plan_mode", "plan");
+        block.tool_call_id = Some("call_a".into());
+        agent
+            .scrollback
+            .push_block(RenderBlock::ToolCall(ToolCallBlock::Other(block)));
+        agent.scrollback.prepare_layout(80, 20);
+        agent.scrollback.set_selected(Some(0));
+        agent.record_committed_plan_review(
+            "call_a".into(),
+            "cancelled".into(),
+            vec![crate::views::plan_approval_view::PlanComment {
+                id: 1,
+                line_range: 1..2,
+                text: "v1 note".into(),
+            }],
+            None,
+            "# Feature A v1\n".into(),
+        );
+        let registry = ActionRegistry::defaults();
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let _ = agent.handle_scrollback_key(&enter, &registry);
+        let viewer = agent
+            .line_viewer
+            .as_mut()
+            .expect("Enter on exit_plan_mode must open the committed review");
+        assert_eq!(
+            viewer.markdown_content_for_feedback().as_deref(),
+            Some("# Feature A v1\n"),
+            "must use the snapshotted body, not current plan.md / Feature B"
+        );
+        viewer.prepare_layout(80, 20);
+        assert!(
+            viewer.lines.iter().any(|item| item.comment_id() == Some(1)),
+            "historical chips must appear on the snapshotted body"
+        );
     }
     #[test]
     fn abandon_plan_optimistically_clears_plan_mode() {

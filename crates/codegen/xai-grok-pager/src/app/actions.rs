@@ -151,6 +151,14 @@ pub enum Action {
         /// Empty for producers that carry plain text (plan-review comments, etc.).
         images: Vec<crate::prompt_images::PastedImage>,
     },
+    /// Persist the open plan-review chip set to the shell (`x.ai/plan_comments`).
+    PersistPlanComments {
+        session_id: acp::SessionId,
+        comments: Vec<crate::views::plan_approval_view::PlanComment>,
+        next_comment_id: u64,
+        commit_outcome: Option<String>,
+        plan_content: Option<String>,
+    },
     /// Cancel-and-send: cancel the running turn (background tasks and queued rows survive shell-side) and run this text as the next prompt turn.
     /// The send-now chord, empty-composer Enter on a queued local row, and the deferred-paste re-issue produce this.
     SendPromptNow {
@@ -1688,6 +1696,14 @@ pub enum Effect {
     SetSessionMode {
         session_id: acp::SessionId,
         mode_id: acp::SessionModeId,
+    },
+    /// Write the open plan-review chips to `plan_mode.json` via `x.ai/plan_comments`.
+    PersistPlanComments {
+        session_id: acp::SessionId,
+        comments: Vec<crate::views::plan_approval_view::PlanComment>,
+        next_comment_id: u64,
+        commit_outcome: Option<String>,
+        plan_content: Option<String>,
     },
     /// Set session mode then send a prompt, sequentially in one task.
     /// Used by `/plan <desc>` to guarantee the mode switch ACP call completes before the prompt is dispatched.

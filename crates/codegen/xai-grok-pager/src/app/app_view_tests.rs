@@ -311,6 +311,7 @@ pub(crate) fn test_app() -> AppView {
         session_picker_grouped: false,
         cancel_rewind_enabled: true,
         session_recap_available: false,
+        plan_review_comments: false,
         shell_feedback_trace_offer: false,
         feedback_trace_choice_latched: false,
         tutorial: None,
@@ -5549,6 +5550,7 @@ fn overlay_q_esc_do_not_exit_while_input_overlay_pending() {
                 session_id: "s".into(),
                 tool_call_id: "c".into(),
                 plan_content: Some("p".into()),
+                ..Default::default()
             };
             let stashed = crate::views::prompt_widget::StashedPrompt {
                 text: String::new(),
@@ -5955,6 +5957,7 @@ fn install_plan_overlay(app: &mut AppView, id: super::super::agent::AgentId) {
         session_id: "s".into(),
         tool_call_id: "c".into(),
         plan_content: Some("p".into()),
+        ..Default::default()
     };
     let stashed = crate::views::prompt_widget::StashedPrompt {
         text: String::new(),
@@ -6179,6 +6182,7 @@ fn install_plan_preview_overlay(app: &mut AppView, id: super::super::agent::Agen
         session_id: "s".into(),
         tool_call_id: "c".into(),
         plan_content: Some("# Plan\n- step one\n- step two".into()),
+        ..Default::default()
     };
     let view = crate::views::plan_approval_view::PlanApprovalViewState::new(
         request,

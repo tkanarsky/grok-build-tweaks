@@ -114,6 +114,9 @@ pub struct AcpConnection {
     /// Whether the session-recap feature is rolled out for this connection. The client gates its automatic away-recap
     /// poll and the manual `/recap` on this so a disabled feature produces zero `x.ai/recap` traffic.
     pub session_recap_available: bool,
+    /// Shell understands structured plan-review chips (`x.ai/planReviewComments`).
+    /// Absent/`false`: pager must send the legacy rendered `feedback` slug.
+    pub plan_review_comments: bool,
     /// Shell-side feedback trace-offer eligibility (see `feedbackTraceOffer`).
     pub feedback_trace_offer: bool,
     /// `AuthManager` for pager-side authenticated channels (voice STT and TTS).
@@ -268,6 +271,7 @@ pub(in crate::acp) async fn initialize_connection(
         leader_status_rx,
         cancel_rewind_enabled: agent.cancel_rewind_enabled,
         session_recap_available: agent.session_recap_available,
+        plan_review_comments: agent.plan_review_comments,
         feedback_trace_offer: agent.feedback_trace_offer,
         auth_manager,
     })
@@ -462,6 +466,7 @@ pub(crate) struct InitializedAgent {
     pub(crate) available_commands: Vec<acp::AvailableCommand>,
     pub(crate) cancel_rewind_enabled: bool,
     pub(crate) session_recap_available: bool,
+    pub(crate) plan_review_comments: bool,
     pub(crate) feedback_trace_offer: bool,
 }
 /// Send InitializeRequest and parse the response.
@@ -500,6 +505,7 @@ async fn initialize(tx: &AcpAgentTx, flags: &ConnectFlags) -> Result<Initialized
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
     let session_recap_available = parse_session_recap_available(resp.meta.as_ref());
+    let plan_review_comments = parse_plan_review_comments(resp.meta.as_ref());
     let feedback_trace_offer = parse_feedback_trace_offer(resp.meta.as_ref());
     let default_auth_method_id = parse_default_auth_method_id(resp.meta.as_ref());
     Ok(InitializedAgent {
@@ -510,6 +516,7 @@ async fn initialize(tx: &AcpAgentTx, flags: &ConnectFlags) -> Result<Initialized
         available_commands,
         cancel_rewind_enabled,
         session_recap_available,
+        plan_review_comments,
         feedback_trace_offer,
     })
 }
@@ -528,6 +535,15 @@ pub fn parse_session_recap_available(meta: Option<&acp::Meta>) -> bool {
     meta.and_then(|m| m.get("sessionRecap"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
+}
+
+/// Structured plan-review chips. Default off so an older shell keeps the rendered `feedback` slug.
+pub fn parse_plan_review_comments(meta: Option<&acp::Meta>) -> bool {
+    meta.and_then(|m| {
+        m.get(xai_grok_tools::implementations::grok_build::exit_plan_mode::PLAN_REVIEW_COMMENTS_CAPABILITY)
+    })
+    .and_then(|v| v.as_bool())
+    .unwrap_or(false)
 }
 pub fn parse_feedback_trace_offer(meta: Option<&acp::Meta>) -> bool {
     meta.and_then(|m| m.get("feedbackTraceOffer"))
@@ -804,6 +820,19 @@ mod tests {
     fn parse_session_recap_available_non_bool_defaults_off() {
         let meta = serde_json::json!({ "sessionRecap": "yes" });
         assert!(!parse_session_recap_available(meta.as_object()));
+    }
+
+    #[test]
+    fn parse_plan_review_comments_true() {
+        let meta = serde_json::json!({ "x.ai/planReviewComments": true });
+        assert!(parse_plan_review_comments(meta.as_object()));
+    }
+
+    #[test]
+    fn parse_plan_review_comments_defaults_off_when_missing() {
+        let meta = serde_json::json!({ "grokShell": true });
+        assert!(!parse_plan_review_comments(meta.as_object()));
+        assert!(!parse_plan_review_comments(None));
     }
     fn make_auth_method(id: &str, name: &str, meta: Option<serde_json::Value>) -> acp::AuthMethod {
         let mut agent = acp::AuthMethodAgent::new(acp::AuthMethodId::new(id), name.to_string());

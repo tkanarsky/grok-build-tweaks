@@ -21,6 +21,8 @@ const WELCOME_TIMEOUT: Duration = Duration::from_secs(20);
 /// Turn 1 seeds the session before quit; turn 2 is the implement turn the shell injects after the resumed approval is approved.
 const SETUP_SENTINEL: &str = "GBT3703SETUP";
 const IMPLEMENT_SENTINEL: &str = "GBT3703IMPLEMENTED";
+/// Distinctive saved chip text. Must reappear on the restored overlay after `--continue`.
+const CHIP_TEXT: &str = "GBT3703CHIP";
 
 const PLAN_BODY: &str = "\
 # Plan GBT3703Repro
@@ -108,6 +110,9 @@ pub async fn assert_plan_approval_restored_after_resume() -> Result<()> {
     {
         bail!("expected resumed session content (plan body or setup sentinel)\n{screen}");
     }
+    resumed
+        .wait_for_text(CHIP_TEXT, Duration::from_secs(10))
+        .context("saved plan-review chip must rehydrate after --continue")?;
     if resumed.contains_text("panicked") {
         bail!("pager panicked\n{screen}");
     }
@@ -181,6 +186,17 @@ fn write_awaiting_plan_mode(path: &Path) -> Result<()> {
     obj.insert(
         "awaiting_plan_approval".into(),
         serde_json::Value::Bool(true),
+    );
+    obj.insert(
+        "open_comments".into(),
+        serde_json::json!({
+            "comments": [{
+                "id": 1,
+                "lineRange": { "start": 3, "end": 4 },
+                "text": CHIP_TEXT,
+            }],
+            "nextCommentId": 2
+        }),
     );
     std::fs::write(path, serde_json::to_vec_pretty(&value)?).context("write plan_mode.json")?;
     Ok(())

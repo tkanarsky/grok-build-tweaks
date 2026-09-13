@@ -206,6 +206,8 @@
             session_id: "sess-A".into(),
             tool_call_id: "tc-normal".into(),
             plan_content: Some("# Plan\nDo stuff".into()),
+        ..Default::default()
+
         };
         let raw = serde_json::value::to_raw_value(&ext_req).unwrap();
         let msg = AcpClientMessage::ExtMethod(xai_acp_lib::AcpArgs {
@@ -237,6 +239,8 @@
             session_id: "sess-A".into(),
             tool_call_id: "tc-yolo".into(),
             plan_content: Some("# Plan\nDo stuff".into()),
+        ..Default::default()
+
         };
         let raw = serde_json::value::to_raw_value(&ext_req).unwrap();
         let msg = AcpClientMessage::ExtMethod(xai_acp_lib::AcpArgs {
@@ -268,6 +272,8 @@
             session_id: "sess-B".into(),
             tool_call_id: "tc-bg-plan".into(),
             plan_content: Some("# Plan".into()),
+        ..Default::default()
+
         };
         let raw = serde_json::value::to_raw_value(&ext_req).unwrap();
         let msg = AcpClientMessage::ExtMethod(xai_acp_lib::AcpArgs {

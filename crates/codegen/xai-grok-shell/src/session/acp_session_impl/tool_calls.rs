@@ -321,22 +321,54 @@ fn revise_plan_message(feedback: &str) -> String {
         format!("The user wants to revise the plan. The user said:\n{feedback}")
     }
 }
+
+pub(super) struct CommittedPlanReview {
+    pub update: XaiSessionUpdate,
+    pub projection: String,
+}
+
+/// Build the structured review event and the model-facing English. Pure so tests
+/// can assert the projection without a live session.
+pub(super) fn committed_plan_review(
+    tool_call_id: &str,
+    outcome: &str,
+    comments: Vec<xai_grok_tools::implementations::grok_build::exit_plan_mode::PlanComment>,
+    feedback: Option<String>,
+    plan_content: Option<&str>,
+) -> CommittedPlanReview {
+    let projection =
+        xai_grok_tools::implementations::grok_build::exit_plan_mode::format_plan_review(
+            &comments,
+            plan_content,
+            feedback.as_deref(),
+        );
+    CommittedPlanReview {
+        update: XaiSessionUpdate::PlanReview {
+            tool_call_id: tool_call_id.to_string(),
+            outcome: outcome.to_string(),
+            comments,
+            feedback,
+            plan_content: plan_content.unwrap_or("").to_string(),
+        },
+        projection,
+    }
+}
 /// What the resume re-park does with the user's decision.
 /// Extracted from `resume_plan_approval` so the branch logic is unit-testable without driving a real turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ResumeAction {
     /// Approved: leave plan mode and start an implement turn (Agent mode).
-    LeaveAndImplement,
+    LeaveAndImplement { review: String },
     /// Request changes: stay in plan mode and start a revise turn (Plan mode).
     StayAndRevise(String),
     /// Abandoned: leave plan mode and wait for the user (no turn).
     LeaveOnly,
 }
-fn resume_action_for(outcome: PlanApprovalOutcome, feedback: Option<String>) -> ResumeAction {
+fn resume_action_for(outcome: PlanApprovalOutcome, projection: String) -> ResumeAction {
     match outcome {
-        PlanApprovalOutcome::Approved => ResumeAction::LeaveAndImplement,
+        PlanApprovalOutcome::Approved => ResumeAction::LeaveAndImplement { review: projection },
         PlanApprovalOutcome::Cancelled => {
-            ResumeAction::StayAndRevise(revise_plan_message(feedback.as_deref().unwrap_or("")))
+            ResumeAction::StayAndRevise(revise_plan_message(&projection))
         }
         PlanApprovalOutcome::Abandoned => ResumeAction::LeaveOnly,
     }
@@ -1827,6 +1859,14 @@ impl SessionActor {
                 Ok(parsed) => match PlanApprovalOutcome::from_response(&parsed) {
                     PlanApprovalOutcome::Abandoned => {
                         tracing::info!("[exit_plan_mode] user abandoned plan — deactivating");
+                        let committed = committed_plan_review(
+                            tool_call_id.0.as_ref(),
+                            "abandoned",
+                            parsed.comments,
+                            parsed.feedback,
+                            plan_content.as_deref(),
+                        );
+                        self.commit_plan_review(committed, false).await;
                         self.leave_plan_mode_to_default();
                         let message = format!(
                             "The user chose to abandon the plan entirely (via the Abandon option in the plan approval dialog). Plan mode has been disabled. Do not call {} again unless the user explicitly asks to re-enter plan mode.",
@@ -1847,8 +1887,17 @@ impl SessionActor {
                         return Ok(Err(ToolLoop::Continue));
                     }
                     PlanApprovalOutcome::Cancelled => {
+                        let committed = committed_plan_review(
+                            tool_call_id.0.as_ref(),
+                            "cancelled",
+                            parsed.comments,
+                            parsed.feedback,
+                            plan_content.as_deref(),
+                        );
+                        let review = committed.projection.clone();
+                        self.commit_plan_review(committed, false).await;
                         let message = if plan_content.is_some() {
-                            revise_plan_message(parsed.feedback.as_deref().unwrap_or(""))
+                            revise_plan_message(&review)
                         } else {
                             "The user does not want to exit plan mode. \
                              Continue planning and ask the user what they would like to do."
@@ -1870,6 +1919,14 @@ impl SessionActor {
                     }
                     PlanApprovalOutcome::Approved => {
                         tracing::info!("[exit_plan_mode] user approved — executing tool");
+                        let committed = committed_plan_review(
+                            tool_call_id.0.as_ref(),
+                            "approved",
+                            parsed.comments,
+                            parsed.feedback,
+                            plan_content.as_deref(),
+                        );
+                        self.commit_plan_review(committed, true).await;
                     }
                 },
                 Err(err) => {
@@ -1950,10 +2007,13 @@ impl SessionActor {
         use xai_grok_tools::implementations::grok_build::exit_plan_mode::{
             ExitPlanModeExtRequest, ExitPlanModeExtResponse,
         };
+        let open = self.plan_mode.lock().open_comments();
         let ext_req = ExitPlanModeExtRequest {
             session_id: self.session_id_string(),
             tool_call_id: tool_call_id.to_string(),
             plan_content,
+            comments: open.comments,
+            next_comment_id: open.next_comment_id,
         };
         debug_assert!(
             !ext_req.session_id.is_empty(),
@@ -1991,10 +2051,33 @@ impl SessionActor {
             serde_json::from_str::<ExitPlanModeExtResponse>(raw.0.get()).unwrap_or_else(|_| {
                 ExitPlanModeExtResponse {
                     outcome: "cancelled".into(),
+                    comments: Vec::new(),
                     feedback: None,
                 }
             }),
         )
+    }
+    pub(super) async fn commit_open_plan_review(
+        &self,
+        tool_call_id: &str,
+        outcome: &str,
+        feedback: Option<String>,
+        plan_content: Option<&str>,
+    ) {
+        let comments = self.plan_mode.lock().open_comments().comments;
+        let committed =
+            committed_plan_review(tool_call_id, outcome, comments, feedback, plan_content);
+        self.commit_plan_review(committed, false).await;
+    }
+    async fn commit_plan_review(&self, committed: CommittedPlanReview, stash_approved: bool) {
+        self.plan_mode.lock().clear_open_comments();
+        if stash_approved && !committed.projection.trim().is_empty() {
+            self.plan_mode
+                .lock()
+                .set_pending_approved_projection(committed.projection.clone());
+        }
+        self.persist_plan_mode_state();
+        self.send_xai_notification(committed.update).await;
     }
     /// Leave plan mode (approved/abandoned) and tell the client to show the Default mode.
     /// Mirrors the mid-turn exit so the resume re-park drives the mode change through the same path.
@@ -2042,7 +2125,7 @@ impl SessionActor {
             "[exit_plan_mode] re-parking approval after resume"
         );
         let parsed = match self
-            .request_plan_approval(&tool_call_id, Some(plan_content))
+            .request_plan_approval(&tool_call_id, Some(plan_content.clone()))
             .await
         {
             Ok(parsed) => parsed,
@@ -2051,7 +2134,18 @@ impl SessionActor {
                 return;
             }
         };
-        match resume_action_for(PlanApprovalOutcome::from_response(&parsed), parsed.feedback) {
+        let outcome = PlanApprovalOutcome::from_response(&parsed);
+        let committed = committed_plan_review(
+            tool_call_id.0.as_ref(),
+            parsed.outcome.as_str(),
+            parsed.comments.clone(),
+            parsed.feedback.clone(),
+            Some(plan_content.as_str()),
+        );
+        let projection = committed.projection.clone();
+        self.commit_plan_review(committed, matches!(outcome, PlanApprovalOutcome::Approved))
+            .await;
+        match resume_action_for(outcome, projection) {
             ResumeAction::LeaveOnly => {
                 tracing::info!("[exit_plan_mode] resume: user abandoned plan");
                 self.leave_plan_mode_to_default();
@@ -2061,15 +2155,16 @@ impl SessionActor {
                 self.start_resume_turn(text, PromptMode::Plan, completion_tx)
                     .await;
             }
-            ResumeAction::LeaveAndImplement => {
+            ResumeAction::LeaveAndImplement { review } => {
                 tracing::info!("[exit_plan_mode] resume: user approved plan");
                 self.leave_plan_mode_to_default();
-                self.start_resume_turn(
-                    PLAN_APPROVED_IMPLEMENT_MESSAGE.to_string(),
-                    PromptMode::Agent,
-                    completion_tx,
-                )
-                .await;
+                let text = if review.trim().is_empty() {
+                    PLAN_APPROVED_IMPLEMENT_MESSAGE.to_string()
+                } else {
+                    format!("{PLAN_APPROVED_IMPLEMENT_MESSAGE}\n\n{review}")
+                };
+                self.start_resume_turn(text, PromptMode::Agent, completion_tx)
+                    .await;
             }
         }
     }
@@ -2823,7 +2918,24 @@ impl SessionActor {
             result.prompt_text =
                 substitute_rendered_output(&result.prompt_text, &result.output, replacement);
         }
-        let prompt_text = if concatenated_json_count > 0 && !self.is_cursor_harness() {
+        let approved_review = matches!(
+            &result.output,
+            xai_grok_tools::types::output::ToolOutput::ExitPlanMode(_)
+        )
+        .then(|| {
+            self.plan_mode
+                .lock()
+                .take_pending_approved_projection()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .flatten();
+        let prompt_text = if let Some(review) = approved_review {
+            if result.prompt_text.trim().is_empty() {
+                review
+            } else {
+                format!("{}\n\n{review}", result.prompt_text)
+            }
+        } else if concatenated_json_count > 0 && !self.is_cursor_harness() {
             let remaining = concatenated_json_count - 1;
             format!(
                 "{}\n\n<system-reminder>\nIMPORTANT: Your tool call contained {} concatenated JSON \
@@ -3451,13 +3563,14 @@ mod plan_mode_edit_gate_tests {
 #[cfg(test)]
 mod plan_approval_helper_tests {
     use super::{
-        PlanApprovalOutcome, ResumeAction, ext_method_no_client, resume_action_for,
-        revise_plan_message,
+        PlanApprovalOutcome, ResumeAction, XaiSessionUpdate, committed_plan_review,
+        ext_method_no_client, resume_action_for, revise_plan_message,
     };
     use xai_grok_tools::implementations::grok_build::exit_plan_mode::ExitPlanModeExtResponse;
     fn resp(outcome: &str) -> ExitPlanModeExtResponse {
         ExitPlanModeExtResponse {
             outcome: outcome.into(),
+            comments: Vec::new(),
             feedback: None,
         }
     }
@@ -3499,17 +3612,54 @@ mod plan_approval_helper_tests {
     #[test]
     fn resume_action_maps_each_outcome() {
         assert_eq!(
-            resume_action_for(PlanApprovalOutcome::Approved, None),
-            ResumeAction::LeaveAndImplement
+            resume_action_for(PlanApprovalOutcome::Approved, String::new()),
+            ResumeAction::LeaveAndImplement {
+                review: String::new()
+            }
         );
         assert_eq!(
-            resume_action_for(PlanApprovalOutcome::Abandoned, Some("ignored".into())),
+            resume_action_for(PlanApprovalOutcome::Abandoned, "ignored".into()),
             ResumeAction::LeaveOnly
         );
-        match resume_action_for(PlanApprovalOutcome::Cancelled, Some("tweak it".into())) {
+        match resume_action_for(PlanApprovalOutcome::Cancelled, "tweak it".into()) {
             ResumeAction::StayAndRevise(text) => assert!(text.contains("tweak it")),
             other => panic!("expected StayAndRevise, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn committed_plan_review_snapshots_plan_body_and_projects_english() {
+        use xai_grok_tools::implementations::grok_build::exit_plan_mode::PlanComment;
+        let committed = committed_plan_review(
+            "call_1",
+            "cancelled",
+            vec![PlanComment {
+                id: 1,
+                line_range: 2..3,
+                text: "use middleware".into(),
+            }],
+            Some("also retries".into()),
+            Some("# Plan\nFix auth\n"),
+        );
+        match committed.update {
+            XaiSessionUpdate::PlanReview {
+                tool_call_id,
+                outcome,
+                comments,
+                feedback,
+                plan_content,
+            } => {
+                assert_eq!(tool_call_id, "call_1");
+                assert_eq!(outcome, "cancelled");
+                assert_eq!(comments.len(), 1);
+                assert_eq!(feedback.as_deref(), Some("also retries"));
+                assert_eq!(plan_content, "# Plan\nFix auth\n");
+            }
+            other => panic!("expected PlanReview, got {other:?}"),
+        }
+        assert!(committed.projection.contains("use middleware"));
+        assert!(committed.projection.contains("Fix auth"));
+        assert!(committed.projection.contains("also retries"));
     }
 }
 #[cfg(test)]

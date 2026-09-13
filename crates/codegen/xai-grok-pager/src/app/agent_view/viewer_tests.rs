@@ -42,6 +42,7 @@ fn agent_with_scrollable_plan() -> AgentView {
         session_id: "test-session".into(),
         tool_call_id: "call-1".into(),
         plan_content: Some(plan),
+        ..Default::default()
     };
     agent.plan_approval_view = Some(
         crate::views::plan_approval_view::PlanApprovalViewState::new(

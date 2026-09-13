@@ -12,6 +12,8 @@ use crate::theme::Theme;
 pub struct OtherToolCallBlock {
     pub name: String,
     pub summary: String,
+    /// ACP tool_call_id, when known. Used to reopen a committed plan review.
+    pub tool_call_id: Option<String>,
     /// Error message if the tool call failed; `None` means success.
     pub error: Option<String>,
     pub output: Option<String>,
@@ -32,6 +34,7 @@ impl OtherToolCallBlock {
         Self {
             name: name.into(),
             summary: summary.into(),
+            tool_call_id: None,
             error: None,
             output: None,
             started_at: None,

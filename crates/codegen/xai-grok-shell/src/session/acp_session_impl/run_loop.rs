@@ -700,6 +700,34 @@ pub(super) async fn run_session(
                         SessionCommand::EmitStatusSnapshot => {
                             session.emit_status_snapshot_detached();
                         }
+                        SessionCommand::PlanComments {
+                            set,
+                            commit,
+                            respond_to,
+                        } => {
+                            if let Some(comments) = set {
+                                session.plan_mode.lock().set_open_comments(comments);
+                                session.persist_plan_mode_state();
+                            }
+                            if let Some(commit) = commit {
+                                let s = session.clone();
+                                tokio::task::spawn_local(async move {
+                                    s.commit_open_plan_review(
+                                        &commit.tool_call_id,
+                                        &commit.outcome,
+                                        commit.feedback,
+                                        if commit.plan_content.is_empty() {
+                                            None
+                                        } else {
+                                            Some(commit.plan_content.as_str())
+                                        },
+                                    )
+                                    .await;
+                                });
+                            }
+                            let current = session.plan_mode.lock().open_comments();
+                            let _ = respond_to.send(current);
+                        }
                         SessionCommand::RestorePlanApproval => {
                             // Spawn the restored plan-approval round-trip so the command loop is not blocked on the open-ended user decision.
                             // Detaching the handle is safe: the task lives on this session's `LocalSet` and is dropped when the session ends.

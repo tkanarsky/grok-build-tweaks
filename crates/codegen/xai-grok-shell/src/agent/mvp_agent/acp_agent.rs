@@ -579,6 +579,7 @@ impl acp::Agent for MvpAgent {
                     // The client gates BOTH its automatic away-recap poll and the manual `/recap` on this
                     // A disabled feature produces zero `x.ai/recap` traffic
                     "sessionRecap": self.cfg.borrow().is_session_recap_enabled(),
+                    (xai_grok_tools::implementations::grok_build::exit_plan_mode::PLAN_REVIEW_COMMENTS_CAPABILITY): true,
                     "feedbackTraceOffer": self.feedback_trace_offer(),
                     "voiceMode": self.cfg.borrow().is_voice_mode_enabled(),
                 })
@@ -2008,6 +2009,7 @@ impl acp::Agent for MvpAgent {
                 )
             }
             "x.ai/interject" => crate::extensions::interject::handle(self, &args).await,
+            "x.ai/plan_comments" => crate::extensions::plan_comments::handle(self, &args).await,
             "x.ai/feedback" | "x.ai/feedback/dismiss" | "x.ai/feedback/drafts/list"
             | "x.ai/feedback/drafts/get" | "x.ai/feedback/drafts/delete"
             | "x.ai/feedback/drafts/update" | "x.ai/feedback/upload-trace"

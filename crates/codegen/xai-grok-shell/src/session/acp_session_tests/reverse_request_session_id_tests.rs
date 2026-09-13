@@ -27,6 +27,7 @@ fn exit_plan_mode_request_carries_session_id() {
         session_id: "sess-xyz".to_string(),
         tool_call_id: "call-2".to_string(),
         plan_content: Some("plan".to_string()),
+        ..Default::default()
     };
     assert!(!req.session_id.is_empty());
     let json = serde_json::to_value(&req).unwrap();

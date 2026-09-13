@@ -21,7 +21,10 @@
 
 pub mod types;
 
-pub use types::{ExitPlanModeExtRequest, ExitPlanModeExtResponse};
+pub use types::{
+    ExitPlanModeExtRequest, ExitPlanModeExtResponse, PLAN_REVIEW_COMMENTS_CAPABILITY, PlanComment,
+    PlanCommentSet, format_plan_review,
+};
 
 use crate::notification::types::PlanModeExited;
 use crate::types::output::ExitPlanModeOutput;

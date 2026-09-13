@@ -1630,6 +1630,38 @@ pub(crate) fn execute(
                     TaskResult::CancelComplete
                 });
         }
+        Effect::PersistPlanComments {
+            session_id,
+            comments,
+            next_comment_id,
+            commit_outcome,
+            plan_content,
+        } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let mut params = serde_json::json!({
+                    "sessionId": session_id.0,
+                    "comments": comments,
+                    "nextCommentId": next_comment_id,
+                });
+                if let Some(outcome) = commit_outcome {
+                    params["commitOutcome"] = serde_json::Value::String(outcome);
+                }
+                if let Some(content) = plan_content {
+                    params["planContent"] = serde_json::Value::String(content);
+                }
+                let request = acp::ExtRequest::new(
+                    "x.ai/plan_comments",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize plan_comments params")
+                        .into(),
+                );
+                if let Err(e) = acp_send(request, &tx).await {
+                    tracing::warn!("Failed to persist plan comments: {e}");
+                }
+                TaskResult::CancelComplete
+            });
+        }
         Effect::SetModeThenPrompt {
             session_id,
             mode_id,
